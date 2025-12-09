@@ -1,0 +1,117 @@
+close all;
+clear all;
+
+replace = 0;
+%% ================================================================
+% Initialize bookkeeping for ΔV budgets
+%% ================================================================
+deltaV_total = 0;
+deltaV_individual = zeros(7,1);
+
+%% ================================================================
+% Grravitational parameters (km^3/s^2)
+%% ================================================================
+Mu_Sun     = 132712000000;
+Mu_Earth   = 398600;
+Mu_Mars    = 42828.3;
+Mu_Jupiter = 126686000;
+
+%% ================================================================
+% Planet radii (km)
+%% ================================================================
+R_Earth   = 6378;
+R_Mars    = 3389.5;
+R_Jupiter = 71490;
+
+%% ================================================================
+% Allocate position and velocity arrays
+%% ================================================================
+numObjects = 4;
+rObject = zeros(numObjects,3);
+vObject = zeros(numObjects,3);
+
+%% ================================================================
+velocityHaveRelSun = zeros(numObjects,3);
+velocityWantRelSun = zeros(numObjects-1,3);
+
+%% ================================================================
+planetId   = [3 4 3 5];
+planetInd  = [1 2 3 4];
+planetColor = ['b','r','b','g'];
+
+%% Visit dates
+datesPlanets = [ ...
+    2024 10 14 0 0 0;
+    2025 3  1  0 0 0;
+    2026 12 3  0 0 0;
+    2030 4  11 0 0 0];
+
+datesObjects = datesPlanets;
+
+charObjects = ['E','M','E','J'];
+
+%% ================================================================
+figure(1);
+currentVelColor = 'm';
+desiredVelColor = 'g';
+
+quiver3(0,0,0,1,1,1,'Color',currentVelColor);
+quiver3(0,0,0,1,1,1,'Color',desiredVelColor);
+
+velocityScaleForPlotting = R_Jupiter*10;
+
+plot3(0,0,0,'yo'); 
+text(0,0,0,'Sun');
+hold on;
+
+%% ================================================================
+initialDatetime = datetime(datesPlanets(1,:));
+finalDatetime   = datetime(datesPlanets(end,:));
+totalNumDays    = days(finalDatetime - initialDatetime);
+
+totalDays = initialDatetime + days(0:(totalNumDays-1));
+
+%% ================================================================
+for di = 1:size(datesPlanets,1)
+
+    [coePrev, rBody, vBody, jd] = planet_elements_and_sv( ...
+        Mu_Sun, planetId(di), datesPlanets(di,1), datesPlanets(di,2), ...
+        datesPlanets(di,3), datesPlanets(di,4), datesPlanets(di,5), datesPlanets(di,6));
+
+    rObject(planetInd(di),:) = rBody;
+    vObject(planetInd(di),:) = vBody;
+
+    rs = zeros(length(totalDays), 3);
+
+    for dayi = 1:length(totalDays)
+        [y,m,d] = ymd(totalDays(dayi));
+        [h,mi,s] = hms(totalDays(dayi));
+
+        [~, rs(dayi,:), ~, ~] = planet_elements_and_sv( ...
+            Mu_Sun, planetId(di), y, m, d, h, mi, s);
+    end
+
+    plot3(rs(:,1),rs(:,2),rs(:,3),'-','Color',planetColor(di));
+
+end
+
+%% ================================================================
+% Conic arcs (Lambert)
+%% ================================================================
+for di = 1:size(datesObjects,1)
+
+    rBody = rObject(di,:);
+    vBody = vObject(di,:);
+    coePrev = coe_from_sv(rBody, vBody, Mu_Sun);
+
+    if di > 1
+
+        T1 = datetime(datesObjects(di-1,:));
+        T2 = datetime(datesObjects(di,:));
+        dT = seconds(T2 - T1);
+
+        % ---- replace ----
+        [V1, V2] = lambertCurtis(rObject(di-1,:), rObject(di,:), dT, Mu_Sun, 'pro');
+
+        velocityHaveRelSun(di,:) = V2;
+        velocityWantRelSun(di-1,:) = V
