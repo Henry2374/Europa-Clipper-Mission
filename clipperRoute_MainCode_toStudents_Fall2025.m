@@ -1,0 +1,438 @@
+% clipperRoute_MainCode_toStudents_Fall2025.m
+close all;
+clear all;
+
+
+replace = 0;
+%% ================================================================
+% Initialize bookkeeping for ΔV budgets
+%% ================================================================
+deltaV_total = 0;
+deltaV_individual = zeros(7,1);
+
+%% ================================================================
+% Gravitational parameters (km^3/s^2)
+%% ================================================================
+Mu_Sun     = 132712000000;
+Mu_Earth   = 398600;
+Mu_Mars    = 42828.3;
+Mu_Jupiter = 126686000;
+
+%% ================================================================
+% Planet radii (km)
+%% ================================================================
+R_Earth   = 6378;
+R_Mars    = 3389.5;
+R_Jupiter = 71490;
+
+%% ================================================================
+% Allocate position and velocity arrays for planets we interact with
+% These store the heliocentric state of Earth, Mars, Earth (2nd flyby),
+% and Jupiter at the times of interest.
+%% ================================================================
+numObjects = 3;
+rObject = zeros(numObjects,3);   % planet heliocentric positions (km)
+vObject = zeros(numObjects,3);   % planet heliocentric velocities (km/s)
+
+%% ================================================================
+% Arrays to store:
+%  • velocityHaveRelSun  – spacecraft heliocentric velocity arriving at a planet
+%  • velocityWantRelSun  – spacecraft heliocentric velocity needed leaving a planet
+%% ================================================================
+velocityHaveRelSun = zeros(numObjects,3);
+velocityWantRelSun = zeros(numObjects-1,3);
+
+%% ================================================================
+% Planet NAIF IDs and plotting attributes
+% Earth (3), Mars (4), Earth (3 again), Jupiter (5)
+%% ================================================================
+planetId   = [3 4 3 5];
+planetInd  = [1 2 3 4];
+planetColor = ['b','r','b','g'];
+
+%% Visit dates
+datesPlanets = [ ...
+    2024 10 14 0 0 0;
+    2025 3  1  0 0 0;
+    2026 12 3  0 0 0;
+    2030 4  11 0 0 0];
+
+datesObjects = datesPlanets;
+
+%% Character tags for labeling planets in plots
+charObjects = ['E','M','E','J'];
+
+%% ================================================================
+% Create initial plot and draw the Sun
+%% ================================================================
+figure(1);
+currentVelColor = 'm';
+desiredVelColor = 'g';
+
+quiver3(0,0,0,1,1,1,'Color',currentVelColor); % placeholder vector
+quiver3(0,0,0,1,1,1,'Color',desiredVelColor); % placeholder vector
+
+velocityScaleForPlotting = R_Jupiter*10; % this is just for drawing the velocity vector direction as a useful scale
+
+% Plot the Sun ("Two scoops of raisins!" - Sun)
+plot3(0,0,0,'yo'); 
+text(0,0,0,'Sun');
+hold on;
+
+%% ================================================================
+% Compute number of days across the mission timeline for plotting
+%% ================================================================
+initialDatetime = datetime(datesPlanets(1,:));
+finalDatetime   = datetime(datesPlanets(end,:));
+totalNumDays    = days(finalDatetime - initialDatetime);
+
+totalDays = initialDatetime + days(0:(totalNumDays-1));
+
+%% ================================================================
+% Loop through each encounter planet and compute:
+%   • its heliocentric position/velocity at encounter date
+%   • its orbit over the full mission for plotting
+%% ================================================================
+for di = 1:size(datesPlanets,1)
+
+    [coePrev, rBody, vBody, jd] = planet_elements_and_sv( ...
+        Mu_Sun, planetId(di), datesPlanets(di,1), datesPlanets(di,2), ...
+        datesPlanets(di,3), datesPlanets(di,4), datesPlanets(di,5), datesPlanets(di,6));
+
+    rObject(planetInd(di),:) = rBody;
+    vObject(planetInd(di),:) = vBody;
+
+    % Precompute orbit sampling for planet trajectory plot
+    rs = zeros(length(totalDays), 3);
+
+    for dayi = 1:length(totalDays)
+        [y,m,d] = ymd(totalDays(dayi));
+        [h,mi,s] = hms(totalDays(dayi));
+
+        [~, rs(dayi,:), ~, ~] = planet_elements_and_sv( ...
+            Mu_Sun, planetId(di), y, m, d, h, mi, s);
+    end
+
+    plot3(rs(:,1),rs(:,2),rs(:,3),'-','Color',planetColor(di));
+
+end
+
+%% ================================================================
+% Compute conic arcs between flybys using Lambert's problem
+%% ================================================================
+for di = 1:size(datesObjects,1)
+
+    rBody = rObject(di,:);
+    vBody = vObject(di,:);
+    coePrev = coe_from_sv(rBody, vBody, Mu_Sun);
+
+    if di > 1
+
+        %% ---- Compute time difference between encounters ----
+        T1 = datetime(datesObjects(di-1,:));
+        T2 = datetime(datesObjects(di,:));
+        dT = seconds(T2 - T1);
+
+        [V1, V2] = lambertCurtis(Mu_Sun, rprev, rBody, dT, 'pro');
+
+        % save velocity as the velocity that I have prior to body and the
+        % velocity that I want to have after the gravity assist
+        velocityHaveRelSun(di,:) = V2;   % (e.g. when di=2 then velocityHaveRelSun(2,:) = ?
+                                         % where ? is the velocity at end of conic connecting Earth to Venus)
+        velocityWantRelSun(di-1,:) = V1; % (e.g. when di=3 then velocityWantRelSun(2,:) = ?
+                                         % where ? is the velocity at
+                                         % beginning of conic connecting Venus to Gaspra)
+        
+        % calculate the orbital elements of the conic using the position and velocity
+        % coe =[h e RA incl w TA a];
+        coePrev =coe_from_sv(rprev,V1,Mu_Sun); % using position and velocity of starting point of conic
+        coeNow =coe_from_sv(rBody,V2,Mu_Sun); % using position and velocity of ending point of conic
+        
+        % the conic orbital elements should be idential EXCEPT for the true
+        % anomaly values because that is where the spacecraft is in its
+        % orbit rather than characterstics about the orbit
+
+        theta_start = coePrev(6)*180/pi;
+        theta_end   = coeNow(6)*180/pi;
+
+        % Handle wraparound for true anomaly
+        if theta_start > theta_end
+            theta_end = theta_end + 360;
+        end
+
+        thetas = (theta_start:theta_end);
+        ecc_new = coePrev(2); % e = coePrev(2)
+        p_new   = coePrev(1)^2 / Mu_Sun; % h = coePrev(1)
+
+        %% ---- Construct rotation matrix from perifocal → inertial ----
+        Omega = coePrev(3)*180/pi;
+        omega = coePrev(5)*180/pi;
+        incl  = coePrev(4)*180/pi;
+
+        sO = sind(Omega); cO = cosd(Omega);
+        si = sind(incl);  ci = cosd(incl);
+        so = sind(omega); co = cosd(omega);
+
+        rotmZYX = [ ...
+            -sO*ci*so + cO*co,  -sO*ci*co - cO*so,  sO*si;
+             cO*ci*so + sO*co,   cO*ci*co - sO*so, -cO*si;
+             si*so,              si*co,             ci];
+
+        %% ---- Generate conic in 3D ----
+        rs_new = zeros(length(thetas),3);
+        for ri = 1:length(thetas)
+            rval = p_new / (1 + ecc_new*cosd(thetas(ri)));
+            rs_new(ri,:) = rotmZYX * [rval*cosd(thetas(ri)); rval*sind(thetas(ri)); 0];
+        end
+
+        %% ---- Plot the transfer conic ----
+        if mod(di,2)==1
+            plot3(rs_new(:,1),rs_new(:,2),rs_new(:,3),'k-');
+        else
+            plot3(rs_new(:,1),rs_new(:,2),rs_new(:,3),'k-.');
+        end
+
+        plot3(rs_new(1,1), rs_new(1,2), rs_new(1,3), 'ko');
+
+        text(rObject(di,1), rObject(di,2), rObject(di,3), ...
+            sprintf('%d-%d-%d\n %c', datesObjects(di,1:3), charObjects(di)));
+
+        %% ---- Plot velocity vectors (before & after flyby) ----
+        velocityBeforeForPlotting = velocityHaveRelSun(di,:);
+        velocityDesiredForPlotting = velocityWantRelSun(di-1,:);
+
+        velHaveRelSunForPlotting = velocityBeforeForPlotting * velocityScaleForPlotting;
+        quiver3(rBody(1),rBody(2),rBody(3), velHaveRelSunForPlotting(1),velHaveRelSunForPlotting(2),velHaveRelSunForPlotting(3), ...
+                'Color',currentVelColor);
+
+        
+        velWantRelSunForPlotting = velocityDesiredForPlotting * velocityScaleForPlotting;
+        quiver3(rprev(1),rprev(2),rprev(3), velWantRelSunForPlotting(1),velWantRelSunForPlotting(2),velWantRelSunForPlotting(3), ...
+                'Color',desiredVelColor);
+
+        view(0,90);
+        axis equal;
+
+        %% ---- Create smaller subplot for each transfer arc ----
+        figure(2);
+
+        velHaveRelSunForPlotting = velocityBeforeForPlotting * velocityScaleForPlotting * 20;
+        velWantRelSunForPlotting = velocityDesiredForPlotting * velocityScaleForPlotting * 20;
+        vBodyScaled   = vBody * velocityScaleForPlotting * 20;
+
+        subplot(2,2,di-1);
+        quiver3(rprev(1),rprev(2),rprev(3), velWantRelSunForPlotting(1),velWantRelSunForPlotting(2),velWantRelSunForPlotting(3), ...
+                'Color',desiredVelColor); hold on;
+        plot3(rs_new(:,1), rs_new(:,2), rs_new(:,3), '.', 'Color',desiredVelColor);
+        text(rBody(1),rBody(2),rBody(3), charObjects(di));
+        text(rprev(1),rprev(2),rprev(3), charObjects(di-1));
+        title([charObjects(di-1) ' to ' charObjects(di)]);
+        xlabel('X (km)'); ylabel('Y (km)');
+        
+
+        subplot(2,2,di);
+        quiver3(rBody(1),rBody(2),rBody(3), velHaveRelSunForPlotting(1),velHaveRelSunForPlotting(2),velHaveRelSunForPlotting(3), ...
+                'Color',currentVelColor); hold on;
+        plot3(rs_new(:,1),rs_new(:,2),rs_new(:,3), '-', 'Color',currentVelColor);
+        quiver3(rBody(1),rBody(2),rBody(3), vBodyScaled(1),vBodyScaled(2),vBodyScaled(3), 'Color','k');
+        text(rBody(1),rBody(2),rBody(3), charObjects(di));
+        text(rprev(1),rprev(2),rprev(3), charObjects(di-1));
+        axis equal; view(0,90);
+        xlabel('X (km)'); ylabel('Y (km)');
+        
+
+        figure(1); hold on;
+    end
+
+    rprev = rBody;
+    coeprev = coePrev;
+
+end
+
+%% ================================================================
+% Compute Earth departure ΔV from 300 km circular parking orbit
+%% ================================================================
+vEarthRelSun = vObject(1,:);
+speedSpacecraftRelEarth = norm(velocityWantRelSun(1, :) - vEarthRelSun);
+
+velOfConicLeavingEarthRelSun  = velocityWantRelSun(1, :);
+velOfConicLeavingEarthRelEarth = velOfConicLeavingEarthRelSun - vEarthRelSun;
+
+% Delta v1 = velocity at perihelion of hyperbola - circular velocity (parking orbit)
+delta_v1 = sqrt( (speedSpacecraftRelEarth)^2 + 2*Mu_Earth/(R_Earth + 300)) - sqrt(Mu_Earth/(R_Earth + 300));
+
+EarthEscapeDeltaV = delta_v1;
+deltaV_individual(1) = EarthEscapeDeltaV;
+deltaV_total = deltaV_total + EarthEscapeDeltaV;
+
+%% ================================================================
+% Compute Jupiter capture ΔV, simplified!
+%% ================================================================
+vJupiterRelSun = vObject(end,:);
+vSpacecraftRelSun = velocityHaveRelSun(end,:);
+
+vSpacecraftRelJupiter = -vJupiterRelSun + vSpacecraftRelSun;
+speedSpacecraftRelJupiter = norm(vSpacecraftRelJupiter);
+
+rapoapsisSpacecraftOrbitJupiter = 1200000;
+rperiapsisSpacecraftOrbitJupiter = 232000;
+semiMajorAxisSpacecraftOrbitJupiter = ...
+    (rapoapsisSpacecraftOrbitJupiter + rperiapsisSpacecraftOrbitJupiter) / 2;
+
+speedPeri = sqrt(Mu_Jupiter*(2 / rperiapsisSpacecraftOrbitJupiter - (1 / semiMajorAxisSpacecraftOrbitJupiter)));
+
+speedApo = sqrt(Mu_Jupiter*(2 / rapoapsisSpacecraftOrbitJupiter - (1 / semiMajorAxisSpacecraftOrbitJupiter)));
+
+v2 = sqrt(speedSpacecraftRelJupiter^2 + 2*Mu_Jupiter/rperiapsisSpacecraftOrbitJupiter) - speedPeri;
+v3 = sqrt(speedSpacecraftRelJupiter^2 + 2*Mu_Jupiter/rapoapsisSpacecraftOrbitJupiter) - speedApo;
+
+JupiterCaptureDeltaV = min([v2 v3]);
+deltaV_individual(7) = JupiterCaptureDeltaV;
+deltaV_total = deltaV_total + JupiterCaptureDeltaV;
+
+%% ================================================================
+% Parameters for gravity-assist geometry
+%% ================================================================
+escape = 0;
+capture = 0;
+darkSide = -1; 
+lightSide = 1;
+
+% the findOptimal_rp is set to one when you want to find the distance to
+% periapsis (rp) that will minimize the delta ΔV, otherwise it will use the
+% minRP
+findOptimal_rp = 1;  % choose rp based on minimizing ΔV if allowed
+
+% Here is where you get to choose if you would like to do a lightside or
+% darkside arrival for your gravity assists. Try changing them! 
+GravityAssistBooleanVec = [escape darkSide darkSide capture];
+
+% The minimum periapsis distance allowed for flyby (not really very practical! but
+% hey, we can dream). 
+minRP_Vec = [escape, 300+R_Mars, 300+R_Earth];
+
+% the gravitational parameters for our problem
+MuID = [escape Mu_Mars Mu_Earth Mu_Jupiter]; % first MuID is set to 0 because it is an escape and not part of gravity assist calculation
+
+%% ================================================================
+% Gravity-assist velocity diagrams
+%% ================================================================
+for di = 1:length(velocityWantRelSun)
+
+    Mu_Planet = MuID(di);
+    
+    rBody = rObject(di,:);
+    velHaveRelSun = velocityHaveRelSun(di,:);
+    velWantRelSun = velocityWantRelSun(di,:);
+    vBody = vObject(di,:);
+
+
+    %% ------------------------------------------------------------
+    % Only perform flyby geometry if this encounter *uses* a flyby
+    %% ------------------------------------------------------------
+    if GravityAssistBooleanVec(di) ~= 0
+
+        v_inf_plus = velWantRelSun - vBody;
+
+        % angular momentum of body we are flying by
+        hbody = cross(vBody/norm(vBody), rBody/norm(rBody));
+        hbody = hbody/norm(hbody);
+
+        v_inf_mag = norm(v_inf_plus);
+
+        %% Minimum-allowed rp option
+        flyby_rad_minimumRP = 2*asin( 1/(1 + minRP_Vec(di)*v_inf_mag^2/Mu_Planet) );
+        flyby_deg_minimumRP = GravityAssistBooleanVec(di)*flyby_rad_minimumRP*180/pi;
+
+        %% This is Rodrigues' rotation formula where we are rotating vector v_inf_plus around axis k by angle th:
+        th = -flyby_deg_minimumRP;
+        v = v_inf_plus;
+        k = hbody/norm(hbody);
+        v_inf_minus_minRP = v*cosd(th) + cross(k,v)*sind(th) + k*dot(k,v)*(1-cosd(th));
+
+        v_need_minRP = vBody + v_inf_minus_minRP;
+        deltaV_minRP = norm(velHaveRelSun - v_need_minRP);
+
+        figure;
+        %% Plot heliocentric velocities in velocity space
+        quiver3(0,0,0, velWantRelSun(1),velWantRelSun(2),velWantRelSun(3), ...
+                0,'Color',desiredVelColor,'linewidth',3,'linestyle',"--");
+        hold on;
+        
+        title([charObjects(di)]);
+        xlabel('V_X (km/s)'); 
+        ylabel('V_Y (km/s)');
+        view(0,90);
+        
+        quiver3(0,0,0, vBody(1),vBody(2),vBody(3), ...
+                0,'Color','k','linewidth',3,'linestyle',"--");
+        
+        quiver3(0,0,0, velHaveRelSun(1),velHaveRelSun(2),velHaveRelSun(3), ...
+                0,'Color',currentVelColor,'linewidth',3,'linestyle',"--");
+
+        quiver3(vBody(1),vBody(2),vBody(3), v_inf_plus(1),v_inf_plus(2),v_inf_plus(3), ...
+                0,'Color',[.65 .65 .65],'linewidth',3,'linestyle',"--");
+
+        %% User-selected rp option (based on matching velocity direction)
+        v_inf_minus_OptimalRP = v_inf_mag * (velHaveRelSun - vBody)/norm(velHaveRelSun - vBody);
+        flyby_rad_OptimalRP = acos( dot(v_inf_plus, v_inf_minus_OptimalRP) / (v_inf_mag)^2 );
+        flyby_deg_OptimalRP = GravityAssistBooleanVec(di)*flyby_rad_OptimalRP*180/pi;
+
+        v_need_OptimalRP = vBody + v_inf_minus_OptimalRP;
+        deltaV_OptimalRP = norm(velHaveRelSun - v_need_OptimalRP);
+
+        rp_OptimalRP = (1/sind(flyby_deg_OptimalRP/2) - 1)*(Mu_Planet/(v_inf_mag^2));
+
+        %% Choose which flyby geometry to use
+        if (findOptimal_rp && deltaV_OptimalRP < deltaV_minRP && rp_OptimalRP > minRP_Vec(di))
+            v_inf_minus = v_inf_minus_OptimalRP;
+            v_need  = v_need_OptimalRP;
+            titleText = sprintf('Chosen r_p: %0.2f km, based on δ = %0.2f°', rp_OptimalRP, flyby_deg_OptimalRP);
+        else
+            v_inf_minus = v_inf_minus_minRP;
+            v_need  = v_need_minRP;
+            titleText = sprintf('Minimum r_p: %0.2f km, δ = %0.2f°', minRP_Vec(di), flyby_deg_minimumRP);
+        end
+
+        % the difference between the velocity we need and what we have
+        delta_v_vec = v_need - velHaveRelSun;
+        delta_v_gravityAssist = norm(delta_v_vec);
+
+        % Update the total ΔV budget for the current iteration
+        deltaV_total = deltaV_total + delta_v_gravityAssist;
+        deltaV_individual(di) = delta_v_gravityAssist;
+
+        % Plot velocity vector for body
+        quiver3(vBody(1),vBody(2),vBody(3), v_inf_minus(1),v_inf_minus(2),v_inf_minus(3), ...
+                0,'Color',[.8 .64 .56],'linewidth',3,'linestyle',"--");
+        % plot velocity vector that you need to get to the next body
+        quiver3(0,0,0, v_need(1),v_need(2),v_need(3), ...
+                0,'Color',[0.8500 0.3250 0.0980],'linewidth',3,'linestyle',"--");
+
+        %plot the velocity that you have currently
+        quiver3(velHaveRelSun(1),velHaveRelSun(2),velHaveRelSun(3), ...
+                delta_v_vec(1),delta_v_vec(2),delta_v_vec(3), ...
+                0,'Color','b','linewidth',3,'linestyle',"--");
+
+        typeAssist = ' | Light-Side @';
+        if GravityAssistBooleanVec(di) == -1
+            typeAssist = ' | Dark-Side @';
+        end
+
+        title([titleText typeAssist charObjects(di)]);
+        axis equal;
+        view(0,90);
+        legend('vel. want','vel. body','vel. have','vinf+','vinf-','vel. need');
+        
+
+    end
+
+    
+
+end
+
+%% ================================================================
+% Report ΔV budget
+%% ================================================================
+deltaV_individual;
+deltaV_total;
