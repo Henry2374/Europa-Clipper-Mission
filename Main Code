@@ -165,9 +165,9 @@ for di = 1:size(datesObjects,1)
         p_new   = coePrev(1)^2 / Mu_Sun;
 
         %% ---- Construct rotation matrix from perifocal → inertial ----
-        Omega = replace*180/pi;
-        omega = replace*180/pi;
-        incl  = replace*180/pi;
+        Omega = coePrev(3)*180/pi;
+        omega = coePrev(5)*180/pi;
+        incl  = coePrev(4)*180/pi;
 
         sO = sind(Omega); cO = cosd(Omega);
         si = sind(incl);  ci = cosd(incl);
