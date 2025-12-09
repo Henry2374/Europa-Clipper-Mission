@@ -29,7 +29,7 @@ R_Jupiter = 71490;
 % These store the heliocentric state of Earth, Mars, Earth (2nd flyby),
 % and Jupiter at the times of interest.
 %% ================================================================
-numObjects = 4;
+numObjects = 3;
 rObject = zeros(numObjects,3);   % planet heliocentric positions (km)
 vObject = zeros(numObjects,3);   % planet heliocentric velocities (km/s)
 
