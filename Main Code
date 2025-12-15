@@ -1,3 +1,4 @@
+% clipperRoute_MainCode_toStudents_Fall2025.m
 close all;
 clear all;
 
@@ -53,7 +54,7 @@ planetColor = ['b','r','b','g'];
 datesPlanets = [ ...
     2024 10 14 0 0 0;
     2025 3  1  0 0 0;
-    2026 12 3  0 0 0;
+    2028 12 3  0 0 0;
     2030 4  11 0 0 0];
 
 datesObjects = datesPlanets;
@@ -142,11 +143,10 @@ for di = 1:size(datesObjects,1)
                                          % where ? is the velocity at
                                          % beginning of conic connecting Venus to Gaspra)
         
-        % calculate the orbital elements of the conic using the position
-        % and velocity
+        % calculate the orbital elements of the conic using the position and velocity
         % coe =[h e RA incl w TA a];
-        coePrev = coe_from_sv(rprev, V1, Mu_Sun); % using position and velocity of starting point of conic
-        coeNow  = coe_from_sv(rBody, V2, Mu_Sun); % using position and velocity of ending point of conic
+        coePrev =coe_from_sv(rprev,V1,Mu_Sun); % using position and velocity of starting point of conic
+        coeNow =coe_from_sv(rBody,V2,Mu_Sun); % using position and velocity of ending point of conic
         
         % the conic orbital elements should be idential EXCEPT for the true
         % anomaly values because that is where the spacecraft is in its
@@ -161,8 +161,8 @@ for di = 1:size(datesObjects,1)
         end
 
         thetas = (theta_start:theta_end);
-        ecc_new = coePrev(2);
-        p_new   = coePrev(1)^2 / Mu_Sun;
+        ecc_new = coePrev(2); % e = coePrev(2)
+        p_new   = coePrev(1)^2 / Mu_Sun; % h = coePrev(1)
 
         %% ---- Construct rotation matrix from perifocal → inertial ----
         Omega = coePrev(3)*180/pi;
@@ -182,7 +182,7 @@ for di = 1:size(datesObjects,1)
         rs_new = zeros(length(thetas),3);
         for ri = 1:length(thetas)
             rval = p_new / (1 + ecc_new*cosd(thetas(ri)));
-            rs_new(ri,:) = rotmZYX * [replace; replace; 0];
+            rs_new(ri,:) = rotmZYX * [rval*cosd(thetas(ri)); rval*sind(thetas(ri)); 0];
         end
 
         %% ---- Plot the transfer conic ----
@@ -253,12 +253,13 @@ end
 % Compute Earth departure ΔV from 300 km circular parking orbit
 %% ================================================================
 vEarthRelSun = vObject(1,:);
-speedSpacecraftRelEarth = replace;
+speedSpacecraftRelEarth = norm(velocityWantRelSun(1, :) - vEarthRelSun);
 
-velOfConicLeavingEarthRelSun  = replace;
-velOfConicLeavingEarthRelEarth = replace;
+velOfConicLeavingEarthRelSun  = velocityWantRelSun(1, :);
+velOfConicLeavingEarthRelEarth = velOfConicLeavingEarthRelSun - vEarthRelSun;
 
-delta_v1 = replace;
+% Delta v1 = velocity at perihelion of hyperbola - circular velocity (parking orbit)
+delta_v1 = sqrt( (speedSpacecraftRelEarth)^2 + 2*Mu_Earth/(R_Earth + 300)) - sqrt(Mu_Earth/(R_Earth + 300));
 
 EarthEscapeDeltaV = delta_v1;
 deltaV_individual(1) = EarthEscapeDeltaV;
@@ -276,11 +277,11 @@ speedSpacecraftRelJupiter = norm(vSpacecraftRelJupiter);
 rapoapsisSpacecraftOrbitJupiter = 1200000;
 rperiapsisSpacecraftOrbitJupiter = 232000;
 semiMajorAxisSpacecraftOrbitJupiter = ...
-    replace;
+    (rapoapsisSpacecraftOrbitJupiter + rperiapsisSpacecraftOrbitJupiter) / 2;
 
-speedPeri = replace;
+speedPeri = sqrt(Mu_Jupiter*(2 / rperiapsisSpacecraftOrbitJupiter - (1 / semiMajorAxisSpacecraftOrbitJupiter)));
 
-speedApo = replace;
+speedApo = sqrt(Mu_Jupiter*(2 / rapoapsisSpacecraftOrbitJupiter - (1 / semiMajorAxisSpacecraftOrbitJupiter)));
 
 v2 = sqrt(speedSpacecraftRelJupiter^2 + 2*Mu_Jupiter/rperiapsisSpacecraftOrbitJupiter) - speedPeri;
 v3 = sqrt(speedSpacecraftRelJupiter^2 + 2*Mu_Jupiter/rapoapsisSpacecraftOrbitJupiter) - speedApo;
@@ -304,7 +305,7 @@ findOptimal_rp = 1;  % choose rp based on minimizing ΔV if allowed
 
 % Here is where you get to choose if you would like to do a lightside or
 % darkside arrival for your gravity assists. Try changing them! 
-GravityAssistBooleanVec = [escape darkSide darkSide capture];
+GravityAssistBooleanVec = [escape lightSide darkSide capture];
 
 % The minimum periapsis distance allowed for flyby (not really very practical! but
 % hey, we can dream). 
@@ -331,7 +332,7 @@ for di = 1:length(velocityWantRelSun)
     %% ------------------------------------------------------------
     if GravityAssistBooleanVec(di) ~= 0
 
-        v_inf_plus = replace;
+        v_inf_plus = velWantRelSun - vBody;
 
         % angular momentum of body we are flying by
         hbody = cross(vBody/norm(vBody), rBody/norm(rBody));
@@ -340,7 +341,7 @@ for di = 1:length(velocityWantRelSun)
         v_inf_mag = norm(v_inf_plus);
 
         %% Minimum-allowed rp option
-        flyby_rad_minimumRP = replace;
+        flyby_rad_minimumRP = 2*asin( 1/(1 + minRP_Vec(di)*v_inf_mag^2/Mu_Planet) );
         flyby_deg_minimumRP = GravityAssistBooleanVec(di)*flyby_rad_minimumRP*180/pi;
 
         %% This is Rodrigues' rotation formula where we are rotating vector v_inf_plus around axis k by angle th:
@@ -374,11 +375,11 @@ for di = 1:length(velocityWantRelSun)
 
         %% User-selected rp option (based on matching velocity direction)
         v_inf_minus_OptimalRP = v_inf_mag * (velHaveRelSun - vBody)/norm(velHaveRelSun - vBody);
-        flyby_rad_OptimalRP = replace;
+        flyby_rad_OptimalRP = acos( dot(v_inf_plus, v_inf_minus_OptimalRP) / (v_inf_mag)^2 );
         flyby_deg_OptimalRP = GravityAssistBooleanVec(di)*flyby_rad_OptimalRP*180/pi;
 
         v_need_OptimalRP = vBody + v_inf_minus_OptimalRP;
-        deltaV_OptimalRP = replace;
+        deltaV_OptimalRP = norm(velHaveRelSun - v_need_OptimalRP);
 
         rp_OptimalRP = (1/sind(flyby_deg_OptimalRP/2) - 1)*(Mu_Planet/(v_inf_mag^2));
 
@@ -394,7 +395,7 @@ for di = 1:length(velocityWantRelSun)
         end
 
         % the difference between the velocity we need and what we have
-        delta_v_vec = replace;
+        delta_v_vec = v_need - velHaveRelSun;
         delta_v_gravityAssist = norm(delta_v_vec);
 
         % Update the total ΔV budget for the current iteration
@@ -435,3 +436,4 @@ end
 %% ================================================================
 deltaV_individual;
 deltaV_total;
+
