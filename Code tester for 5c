@@ -1,0 +1,106 @@
+% Plot Europa Clipper mission from .mat file
+
+clear; clc; close all;
+
+compute_from_spice = false;  
+saved_data_file = 'clipper_traj_with_planets.mat';
+
+% Dates to label
+dates_to_label = [ ...
+    2024 10 14 0 0 0;  
+    2025 3 1   0 0 0;  
+    2026 12 3  0 0 0;  
+    2030 4 11 0 0 0];
+
+%% ---------------------------------------------------------------
+% Load saved data
+%% ---------------------------------------------------------------
+loaded = load(saved_data_file);
+pos        = loaded.pos;          % spacecraft position (Sun-centered)
+et         = loaded.et;           % ephemeris time (s)
+planet_pos = loaded.planet_pos;   % planet positions (Sun-centered)
+et_labels  = loaded.et_labels;
+utc_labels = loaded.utc_labels;
+label_idx  = loaded.label_idx;
+
+%% ---------------------------------------------------------------
+% Plot trajectory with planetary orbits
+%% ---------------------------------------------------------------
+figure; hold on; grid on; axis equal;
+
+% Clipper trajectory
+plot3(pos(1,:), pos(2,:), pos(3,:), 'k','LineWidth',2,'DisplayName','Europa Clipper');
+
+% Planetary orbits
+colors = struct('EARTH',[0 0.5 1],'MARS',[1 0.3 0.3],'JUPITER',[1 0.7 0.2]);
+planets = fieldnames(planet_pos);
+for p = 1:length(planets)
+    plot3(planet_pos.(planets{p})(1,:), ...
+          planet_pos.(planets{p})(2,:), ...
+          planet_pos.(planets{p})(3,:), ...
+          'Color',colors.(planets{p}), ...
+          'LineWidth',1.5,'DisplayName',planets{p});
+end
+
+% Add only the specific date labels along Clipper trajectory
+for i = 1:length(label_idx)
+    k = label_idx(i);
+    text(pos(1,k), pos(2,k), pos(3,k), utc_labels(i), ...
+        'FontSize',8,'Color','b', ...
+        'HorizontalAlignment','left','VerticalAlignment','bottom');
+end
+
+xlabel('X (km)'); ylabel('Y (km)'); zlabel('Z (km)');
+title('Europa Clipper Trajectory with Planetary Orbits (Sun-centered)');
+legend('show');
+view(35,25);
+
+%% ===============================================================
+% JUPITER CAPTURE ORBITAL ELEMENT EXTRACTION
+%% ===============================================================
+
+% --- Step 1: Find Jupiter arrival (minimum distance) ---
+r_rel = pos - planet_pos.JUPITER;
+dist = vecnorm(r_rel);
+[~, k_cap] = min(dist);
+
+% --- Step 2: Compute velocities via finite difference ---
+dt = diff(et);  % seconds
+
+v_sc = diff(pos,1,2) ./ dt;
+v_sc = [v_sc(:,1), v_sc];   % pad to match size
+
+v_jup = diff(planet_pos.JUPITER,1,2) ./ dt;
+v_jup = [v_jup(:,1), v_jup];
+
+% --- Step 3: Jupiter-centered state ---
+r_sc_jup = pos(:,k_cap) - planet_pos.JUPITER(:,k_cap);
+v_sc_jup = v_sc(:,k_cap) - v_jup(:,k_cap);
+
+% --- Step 4: Orbital elements ---
+muJ = 1.26686534e8; % km^3/s^2 (Jupiter)
+
+r = norm(r_sc_jup);
+v = norm(v_sc_jup);
+
+energy = v^2/2 - muJ/r;
+a = -muJ/(2*energy);
+
+h = cross(r_sc_jup, v_sc_jup);
+e_vec = cross(v_sc_jup, h)/muJ - r_sc_jup/r;
+e = norm(e_vec);
+
+rp = a*(1 - e);
+RJ = 71492; % Jupiter radius (km)
+hp = rp - RJ;
+
+% --- Step 5: Output results ---
+fprintf('\n============================================\n');
+fprintf('JUPITER INITIAL CAPTURE ORBIT\n');
+fprintf('============================================\n');
+fprintf('Capture UTC Date : %s\n', utc_labels{end});
+fprintf('Semi-major axis  : %.2f km\n', a);
+fprintf('Eccentricity     : %.4f\n', e);
+fprintf('Periapsis radius : %.2f km\n', rp);
+fprintf('Periapsis alt.   : %.2f km above Jupiter\n', hp);
+fprintf('============================================\n');
