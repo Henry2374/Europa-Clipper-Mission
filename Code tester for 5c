@@ -90,29 +90,65 @@ RJ = 71492; % Jupiter radius (km)
 hp = rp - RJ;
 
 
-% Relative position and velocity (Jupiter-centered)
-r_rel = pos - planet_pos.JUPITER;
-v_rel = v_sc - v_jup;
+%% ===============================================================
+% FLYBY PARAMETERS FOR ALL PLANETS
+%% ===============================================================
 
-% Closest approach index (periapsis)
-dist = vecnorm(r_rel);
-[~, k_ca] = min(dist);
+% Planet radii (km)
+planet_radius = struct( ...
+    'EARTH',   6378, ...
+    'MARS',    3396, ...
+    'JUPITER', 71492 );
 
-% --- Flyby altitude ---
-rp = norm(r_rel(:,k_ca));
-RJ = 71492;            % Jupiter radius (km)
-hp = rp - RJ;
+dt_sample = 6*3600;   % 6 hours (seconds)
 
-% --- v-infinity before and after periapsis ---
-% sample 6 hours before and after closest approach
-% --- v-infinity before and after periapsis ---
-dt_sample = 6*3600;   % seconds
+fprintf('\n====================================================\n');
+fprintf('FLYBY PARAMETERS (v_inf AND ALTITUDE)\n');
+fprintf('====================================================\n');
 
-[~, k_minus] = min(abs(et - (et(k_ca) - dt_sample)));
-[~, k_plus ] = min(abs(et - (et(k_ca) + dt_sample)));
+planets = fieldnames(planet_pos);
 
-v_inf_minus = norm(v_rel(:,k_minus));
-v_inf_plus  = norm(v_rel(:,k_plus));
+for p = 1:length(planets)
+
+    pname = planets{p};
+
+    % Skip planets without defined radius
+    if ~isfield(planet_radius, pname)
+        continue
+    end
+
+    % Relative position and velocity
+    r_rel = pos - planet_pos.(pname);
+    v_rel = v_sc - ...
+        diff([planet_pos.(pname)(:,1), planet_pos.(pname)],1,2) ./ diff([et(1), et]);
+
+    % Closest approach
+    dist = vecnorm(r_rel);
+    [~, k_ca] = min(dist);
+
+    % Time indices before and after CA
+    [~, k_minus] = min(abs(et - (et(k_ca) - dt_sample)));
+    [~, k_plus ] = min(abs(et - (et(k_ca) + dt_sample)));
+
+    % v-infinity values
+    v_inf_minus = norm(v_rel(:,k_minus));
+    v_inf_plus  = norm(v_rel(:,k_plus));
+
+    % Flyby altitude
+    rp = norm(r_rel(:,k_ca));
+    hp = rp - planet_radius.(pname);
+
+    % Output
+    fprintf('\n--------------------------------------------\n');
+    fprintf('%s FLYBY\n', pname);
+    fprintf('Closest approach index : %d\n', k_ca);
+    fprintf('Flyby altitude         : %.2f km\n', hp);
+    fprintf('v_inf^- (incoming)     : %.3f km/s\n', v_inf_minus);
+    fprintf('v_inf^+ (outgoing)     : %.3f km/s\n', v_inf_plus);
+end
+
+fprintf('\n====================================================\n');
+
 
 fprintf('\n============================================\n');
 fprintf('JUPITER INITIAL CAPTURE ORBIT\n');
@@ -123,11 +159,4 @@ fprintf('Eccentricity     : %.4f\n', e);
 fprintf('Periapsis radius : %.2f km\n', rp);
 fprintf('Periapsis alt.   : %.2f km above Jupiter\n', hp);
 fprintf('============================================\n');
-fprintf('\n============================================\n');
-fprintf('JUPITER FLYBY / CAPTURE PARAMETERS\n');
-fprintf('============================================\n');
-fprintf('Closest approach index : %d\n', k_ca);
-fprintf('Flyby altitude         : %.2f km\n', hp);
-fprintf('v_inf^- (incoming)     : %.3f km/s\n', v_inf_minus);
-fprintf('v_inf^+ (outgoing)     : %.3f km/s\n', v_inf_plus);
-fprintf('============================================\n');
+
